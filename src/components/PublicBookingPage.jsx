@@ -1,22 +1,21 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar as CalendarIcon, Clock, Globe, ArrowLeft, Check, CheckCircle2, User, Mail, MessageSquare, AlertCircle } from 'lucide-react';
+import { Calendar as CalendarIcon, Clock, Globe, ArrowLeft, Check, CheckCircle2, User, Mail, MessageSquare, AlertCircle, Loader2 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { useApp } from '../context/AppContext';
-import { getUsers, getUserAvailability, generateAvailableSlots } from '../utils/storage';
+import { apiGetUserByUsername, apiGetSlots } from '../utils/api';
 
 export default function PublicBookingPage({ targetUsername }) {
   const { createBooking, openEmailInspector, navigate } = useApp();
 
-  // Find host user
+  // Find host user (async)
   const username = (targetUsername || 'akhil').toLowerCase().trim();
-  const allUsers = getUsers();
-  const hostUser = allUsers.find(u => u.username.toLowerCase() === username);
+  const [hostUser, setHostUser] = useState(null);
+  const [hostLoading, setHostLoading] = useState(true);
 
   // Calendar State
   const [currentDateObj, setCurrentDateObj] = useState(new Date());
   const [selectedDateStr, setSelectedDateStr] = useState(() => {
     const today = new Date();
-    // Default to tomorrow or next available day
     const tm = new Date(today);
     tm.setDate(tm.getDate() + 1);
     const y = tm.getFullYear();
@@ -26,7 +25,9 @@ export default function PublicBookingPage({ targetUsername }) {
   });
 
   const [availableSlots, setAvailableSlots] = useState([]);
+  const [slotsLoading, setSlotsLoading] = useState(false);
   const [selectedSlot, setSelectedSlot] = useState(null);
+  const [hostTimezone, setHostTimezone] = useState('Asia/Kolkata (GMT +5:30)');
 
   // Booking Form State
   const [step, setStep] = useState('SLOT'); // 'SLOT', 'FORM', 'CONFIRMED'
@@ -37,17 +38,39 @@ export default function PublicBookingPage({ targetUsername }) {
   const [confirmedBooking, setConfirmedBooking] = useState(null);
   const [errorMsg, setErrorMsg] = useState('');
 
-  const availabilityConfig = getUserAvailability(username);
-  const hostTimezone = availabilityConfig ? availabilityConfig.timezone : 'Asia/Kolkata (GMT +5:30)';
-
-  // Calculate slots when selectedDateStr or username changes
+  // Fetch host user on mount
   useEffect(() => {
-    if (selectedDateStr) {
-      const slots = generateAvailableSlots(username, selectedDateStr);
-      setAvailableSlots(slots);
+    (async () => {
+      setHostLoading(true);
+      try {
+        const user = await apiGetUserByUsername(username);
+        setHostUser(user);
+        setHostTimezone(user.timezone || 'Asia/Kolkata (GMT +5:30)');
+      } catch {
+        setHostUser(null);
+      } finally {
+        setHostLoading(false);
+      }
+    })();
+  }, [username]);
+
+  // Fetch slots when selectedDateStr or username changes
+  useEffect(() => {
+    if (!selectedDateStr || !hostUser) return;
+    (async () => {
+      setSlotsLoading(true);
+      try {
+        const data = await apiGetSlots(username, selectedDateStr);
+        setAvailableSlots(data.slots || []);
+        if (data.timezone) setHostTimezone(data.timezone);
+      } catch {
+        setAvailableSlots([]);
+      } finally {
+        setSlotsLoading(false);
+      }
       setSelectedSlot(null);
-    }
-  }, [username, selectedDateStr]);
+    })();
+  }, [username, selectedDateStr, hostUser]);
 
   // Handle Confetti on Success
   useEffect(() => {
@@ -64,6 +87,15 @@ export default function PublicBookingPage({ targetUsername }) {
       }
     }
   }, [step]);
+
+  if (hostLoading) {
+    return (
+      <div style={{ minHeight: 'calc(100vh - 72px)', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-dark)' }}>
+        <Loader2 size={40} color="var(--accent-green)" style={{ animation: 'spin 1s linear infinite' }} />
+        <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+      </div>
+    );
+  }
 
   if (!hostUser) {
     return (
@@ -119,36 +151,34 @@ export default function PublicBookingPage({ targetUsername }) {
     setSelectedDateStr(dateStr);
   };
 
-  const handleReserveSubmit = (e) => {
+  const handleReserveSubmit = async (e) => {
     e.preventDefault();
     if (!selectedSlot || !guestName || !guestEmail) return;
 
     setIsSubmitting(true);
     setErrorMsg('');
 
-    setTimeout(() => {
-      const res = createBooking({
-        hostUsername: username,
-        hostName: hostUser.name || username,
-        guestName,
-        guestEmail,
-        date: selectedDateStr,
-        slot: selectedSlot,
-        timezone: hostTimezone,
-        message
-      });
+    const res = await createBooking({
+      hostUsername: username,
+      hostName: hostUser.name || username,
+      guestName,
+      guestEmail,
+      date: selectedDateStr,
+      slot: selectedSlot,
+      timezone: hostTimezone,
+      message
+    });
 
-      setIsSubmitting(false);
+    setIsSubmitting(false);
 
-      if (res.success) {
-        setConfirmedBooking(res.booking);
-        setStep('CONFIRMED');
-      } else {
-        setErrorMsg(res.error === 'DOUBLE_BOOKING_CONFLICT'
-          ? 'This time slot has just been reserved by someone else! Please select another time slot.'
-          : 'Failed to reserve slot. Please try again.');
-      }
-    }, 500);
+    if (res.success) {
+      setConfirmedBooking(res.booking);
+      setStep('CONFIRMED');
+    } else {
+      setErrorMsg(res.error === 'DOUBLE_BOOKING_CONFLICT'
+        ? 'This time slot has just been reserved by someone else! Please select another time slot.'
+        : 'Failed to reserve slot. Please try again.');
+    }
   };
 
   return (

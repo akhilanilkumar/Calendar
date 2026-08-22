@@ -1,18 +1,16 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import {
-  getCurrentUser,
-  getUsers,
-  registerUser,
-  updateUserProfile,
-  getUserAvailability,
-  saveUserAvailability,
-  createBooking,
-  cancelBooking,
-  getEmailOutbox,
-  initializeStorage,
-  setCurrentUser as setStorageCurrentUser,
-  isUsernameAvailable
-} from '../utils/storage';
+  apiLogin,
+  apiSignup,
+  apiGetMe,
+  apiLogout,
+  apiUpdateProfile,
+  apiCheckUsername,
+  apiSaveAvailability,
+  apiCreateBooking,
+  apiCancelBooking,
+  apiGetEmails
+} from '../utils/api';
 
 const AppContext = createContext();
 
@@ -23,13 +21,24 @@ export function AppProvider({ children }) {
   const [emailOutbox, setEmailOutbox] = useState([]);
   const [inspectingEmail, setInspectingEmail] = useState(null);
   const [isEmailModalOpen, setIsEmailModalOpen] = useState(false);
+  const [authLoading, setAuthLoading] = useState(true);
 
-  // Initialize storage & user session on mount
+  // Restore session from JWT on mount
   useEffect(() => {
-    initializeStorage();
-    const u = getCurrentUser();
-    setUser(u);
-    setEmailOutbox(getEmailOutbox());
+    (async () => {
+      try {
+        const me = await apiGetMe();
+        setUser(me);
+        if (me) {
+          const emails = await apiGetEmails();
+          setEmailOutbox(emails);
+        }
+      } catch {
+        // no session
+      } finally {
+        setAuthLoading(false);
+      }
+    })();
 
     // Simple hash/pathname sync
     const handlePopState = () => {
@@ -63,97 +72,124 @@ export function AppProvider({ children }) {
   };
 
   // Auth Handlers
-  const handleLogin = (email, password) => {
-    const users = getUsers();
-    const found = users.find(
-      u => u.email.toLowerCase() === email.toLowerCase() && (!u.password || u.password === password)
-    );
-
-    if (found) {
-      setUser(found);
-      setStorageCurrentUser(found);
-      showToast(`Welcome back, ${found.name || found.username}!`);
+  const handleLogin = async (email, password) => {
+    try {
+      const data = await apiLogin(email, password);
+      setUser(data.user);
+      showToast(`Welcome back, ${data.user.name || data.user.username}!`);
       navigate('/dashboard');
       return { success: true };
-    } else {
-      showToast('Invalid email or password', 'error');
-      return { success: false, error: 'Invalid email or password' };
+    } catch (err) {
+      showToast(err.message || 'Invalid email or password', 'error');
+      return { success: false, error: err.message };
     }
   };
 
-  const handleSignup = (email, password, name = '') => {
+  const handleSignup = async (email, password, name = '') => {
     try {
-      const newUser = registerUser(email, password, name);
-      setUser(newUser);
+      const data = await apiSignup(email, password, name);
+      setUser(data.user);
       showToast(`Account created! Let's set up your booking link.`);
       navigate('/setup/username');
-      return { success: true, user: newUser };
+      return { success: true, user: data.user };
     } catch (err) {
-      showToast('Signup failed. Please try again.', 'error');
+      showToast(err.message || 'Signup failed. Please try again.', 'error');
       return { success: false, error: err.message };
     }
   };
 
   const handleLogout = () => {
+    apiLogout();
     setUser(null);
-    setStorageCurrentUser(null);
     showToast('Logged out successfully');
     navigate('/');
   };
 
-  const handleUpdateProfile = (updates) => {
+  const handleUpdateProfile = async (updates) => {
     if (!user) return;
-    const updated = updateUserProfile(user.id, updates);
-    if (updated) {
+    try {
+      const updated = await apiUpdateProfile(updates);
       setUser(updated);
       showToast('Profile updated successfully!');
+    } catch (err) {
+      showToast(err.message || 'Update failed', 'error');
     }
   };
 
   // Availability Handler
-  const handleSaveAvailability = (schedule) => {
+  const handleSaveAvailability = async (schedule) => {
     if (!user) return;
-    saveUserAvailability(user.username, schedule);
-    showToast('Availability schedule saved!');
+    try {
+      await apiSaveAvailability(schedule.timezone, schedule.days);
+      showToast('Availability schedule saved!');
+    } catch (err) {
+      showToast(err.message || 'Failed to save availability', 'error');
+    }
   };
 
   // Booking Handler
-  const handleCreateBooking = (bookingData) => {
+  const handleCreateBooking = async (bookingData) => {
     try {
-      const booking = createBooking(bookingData);
+      const booking = await apiCreateBooking({
+        hostUsername: bookingData.hostUsername,
+        guestName: bookingData.guestName,
+        guestEmail: bookingData.guestEmail,
+        date: bookingData.date,
+        startTime: bookingData.slot.startTime,
+        endTime: bookingData.slot.endTime,
+        timezone: bookingData.timezone,
+        message: bookingData.message
+      });
       // Refresh outbox
-      setEmailOutbox(getEmailOutbox());
+      const emails = await apiGetEmails();
+      setEmailOutbox(emails);
       showToast(`Meeting booked with ${booking.hostName}!`, 'success');
       return { success: true, booking };
     } catch (err) {
       if (err.message === 'DOUBLE_BOOKING_CONFLICT') {
         showToast('This time slot has just been reserved by someone else! Please pick another slot.', 'error');
       } else {
-        showToast('Failed to create booking', 'error');
+        showToast(err.message || 'Failed to create booking', 'error');
       }
       return { success: false, error: err.message };
     }
   };
 
-  const handleCancelBooking = (bookingId) => {
-    const cancelled = cancelBooking(bookingId);
-    if (cancelled) {
+  const handleCancelBooking = async (bookingId) => {
+    try {
+      await apiCancelBooking(bookingId);
       showToast('Reservation cancelled');
+    } catch (err) {
+      showToast(err.message || 'Failed to cancel', 'error');
     }
   };
 
   // Open Email Inspector
-  const openEmailInspector = (emailObj = null) => {
-    const currentOutbox = getEmailOutbox();
-    setEmailOutbox(currentOutbox);
-    setInspectingEmail(emailObj || (currentOutbox.length > 0 ? currentOutbox[0] : null));
-    setIsEmailModalOpen(true);
+  const openEmailInspector = async (emailObj = null) => {
+    try {
+      const emails = await apiGetEmails();
+      setEmailOutbox(emails);
+      setInspectingEmail(emailObj || (emails.length > 0 ? emails[0] : null));
+      setIsEmailModalOpen(true);
+    } catch {
+      setIsEmailModalOpen(true);
+    }
+  };
+
+  // Username availability check (async)
+  const checkUsernameAvailable = async (username) => {
+    try {
+      return await apiCheckUsername(username);
+    } catch {
+      return false;
+    }
   };
 
   return (
     <AppContext.Provider
       value={{
         user,
+        authLoading,
         currentPath,
         navigate,
         toast,
@@ -171,7 +207,7 @@ export function AppProvider({ children }) {
         setInspectingEmail,
         isEmailModalOpen,
         setIsEmailModalOpen,
-        checkUsernameAvailable: isUsernameAvailable
+        checkUsernameAvailable
       }}
     >
       {children}

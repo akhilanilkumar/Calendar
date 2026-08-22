@@ -14,20 +14,20 @@ export default function UsernameSetup() {
       return;
     }
     setChecking(true);
-    const timer = setTimeout(() => {
-      const avail = checkUsernameAvailable(username, user ? user.id : null);
+    const timer = setTimeout(async () => {
+      const avail = await checkUsernameAvailable(username);
       setIsAvailable(avail);
       setChecking(false);
-    }, 200);
+    }, 300);
     return () => clearTimeout(timer);
   }, [username, user, checkUsernameAvailable]);
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     if (!isAvailable || !username) return;
 
     if (user) {
-      updateProfile({ username: username.toLowerCase().trim() });
+      await updateProfile({ username: username.toLowerCase().trim() });
     }
     showToast('Username set successfully!');
     navigate('/setup/availability');

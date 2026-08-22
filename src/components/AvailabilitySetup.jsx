@@ -1,14 +1,37 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Clock, ArrowRight, Check } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { getUserAvailability } from '../utils/storage';
+import { apiGetAvailability } from '../utils/api';
+
+const DEFAULT_DAYS = {
+  Monday: { enabled: true, start: '09:00', end: '17:00' },
+  Tuesday: { enabled: true, start: '09:00', end: '17:00' },
+  Wednesday: { enabled: true, start: '09:00', end: '17:00' },
+  Thursday: { enabled: true, start: '09:00', end: '17:00' },
+  Friday: { enabled: true, start: '09:00', end: '17:00' },
+  Saturday: { enabled: false, start: '10:00', end: '15:00' },
+  Sunday: { enabled: false, start: '10:00', end: '15:00' }
+};
 
 export default function AvailabilitySetup() {
   const { user, saveAvailability, navigate, showToast } = useApp();
-  const initialSchedule = getUserAvailability(user ? user.username : 'akhil');
 
-  const [days, setDays] = useState(initialSchedule.days);
-  const [timezone, setTimezone] = useState(initialSchedule.timezone || 'Asia/Kolkata (GMT +5:30)');
+  const [days, setDays] = useState(DEFAULT_DAYS);
+  const [timezone, setTimezone] = useState('Asia/Kolkata (GMT +5:30)');
+  const [blockedDates, setBlockedDates] = useState([]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const avail = await apiGetAvailability(user ? user.username : 'akhil');
+        if (avail.days && Object.keys(avail.days).length > 0) setDays(avail.days);
+        if (avail.timezone) setTimezone(avail.timezone);
+        if (avail.blockedDates) setBlockedDates(avail.blockedDates);
+      } catch {
+        // use defaults
+      }
+    })();
+  }, [user]);
 
   const timeOptions = [
     '08:00', '09:00', '10:00', '11:00', '12:00',
@@ -34,7 +57,7 @@ export default function AvailabilitySetup() {
     saveAvailability({
       timezone,
       days,
-      blockedDates: initialSchedule.blockedDates || []
+      blockedDates: blockedDates || []
     });
     showToast('Setup complete! Your booking page is live.');
     navigate('/dashboard');

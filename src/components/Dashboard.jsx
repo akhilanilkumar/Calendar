@@ -1,17 +1,20 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Copy, ExternalLink, Calendar, Clock, User, Check, X, Ban, Settings, Plus, Mail } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { getBookingsForHost, getUserAvailability, saveUserAvailability } from '../utils/storage';
+import { apiGetAvailability, apiSaveAvailability, apiBlockDate, apiUnblockDate, apiGetBookings } from '../utils/api';
 
 export default function Dashboard() {
   const { user, updateProfile, cancelBooking, navigate, showToast } = useApp();
   const [activeTab, setActiveTab] = useState('HOME'); // 'HOME', 'MEETINGS', 'AVAILABILITY', 'SETTINGS'
   const [copied, setCopied] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   // Availability State
-  const initialSchedule = getUserAvailability(user ? user.username : 'akhil');
-  const [schedule, setSchedule] = useState(initialSchedule);
+  const [schedule, setSchedule] = useState({ timezone: 'Asia/Kolkata (GMT +5:30)', days: {}, blockedDates: [] });
   const [newBlockedDate, setNewBlockedDate] = useState('');
+
+  // Bookings State
+  const [bookings, setBookings] = useState([]);
 
   // Profile Settings State
   const [profileName, setProfileName] = useState(user ? user.name : '');
@@ -19,8 +22,26 @@ export default function Dashboard() {
   const [profileBio, setProfileBio] = useState(user ? user.bio : '');
 
   const hostUsername = user ? user.username : 'akhil';
-  const bookings = getBookingsForHost(hostUsername);
   const upcomingBookings = bookings.filter(b => b.status === 'confirmed');
+
+  // Fetch data on mount
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      try {
+        const [avail, bks] = await Promise.all([
+          apiGetAvailability(hostUsername),
+          apiGetBookings()
+        ]);
+        setSchedule(avail);
+        setBookings(bks);
+      } catch (err) {
+        console.error('Dashboard data fetch error:', err);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [hostUsername]);
 
   const publicUrl = `${window.location.origin}/${hostUsername}`;
 
@@ -31,10 +52,14 @@ export default function Dashboard() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleSaveAvailabilityForm = (e) => {
+  const handleSaveAvailabilityForm = async (e) => {
     e.preventDefault();
-    saveUserAvailability(hostUsername, schedule);
-    showToast('Availability settings saved!');
+    try {
+      await apiSaveAvailability(schedule.timezone, schedule.days);
+      showToast('Availability settings saved!');
+    } catch (err) {
+      showToast(err.message || 'Failed to save', 'error');
+    }
   };
 
   const handleToggleDay = (dayName) => {
@@ -57,28 +82,37 @@ export default function Dashboard() {
     }));
   };
 
-  const handleAddBlockedDate = () => {
+  const handleAddBlockedDate = async () => {
     if (!newBlockedDate) return;
     if (schedule.blockedDates && schedule.blockedDates.includes(newBlockedDate)) return;
-    const updated = [...(schedule.blockedDates || []), newBlockedDate];
-    const newSched = { ...schedule, blockedDates: updated };
-    setSchedule(newSched);
-    saveUserAvailability(hostUsername, newSched);
-    setNewBlockedDate('');
-    showToast(`Blocked date ${newBlockedDate}`);
+    try {
+      await apiBlockDate(newBlockedDate);
+      setSchedule(prev => ({ ...prev, blockedDates: [...(prev.blockedDates || []), newBlockedDate] }));
+      setNewBlockedDate('');
+      showToast(`Blocked date ${newBlockedDate}`);
+    } catch (err) {
+      showToast(err.message || 'Failed to block date', 'error');
+    }
   };
 
-  const handleRemoveBlockedDate = (dateStr) => {
-    const updated = (schedule.blockedDates || []).filter(d => d !== dateStr);
-    const newSched = { ...schedule, blockedDates: updated };
-    setSchedule(newSched);
-    saveUserAvailability(hostUsername, newSched);
-    showToast(`Unblocked date ${dateStr}`);
+  const handleRemoveBlockedDate = async (dateStr) => {
+    try {
+      await apiUnblockDate(dateStr);
+      setSchedule(prev => ({ ...prev, blockedDates: (prev.blockedDates || []).filter(d => d !== dateStr) }));
+      showToast(`Unblocked date ${dateStr}`);
+    } catch (err) {
+      showToast(err.message || 'Failed to unblock date', 'error');
+    }
   };
 
-  const handleSaveProfile = (e) => {
+  const handleCancelBookingLocal = async (bookingId) => {
+    await cancelBooking(bookingId);
+    setBookings(prev => prev.map(b => b.id === bookingId ? { ...b, status: 'cancelled' } : b));
+  };
+
+  const handleSaveProfile = async (e) => {
     e.preventDefault();
-    updateProfile({
+    await updateProfile({
       name: profileName,
       username: profileUsername,
       bio: profileBio
@@ -215,7 +249,7 @@ export default function Dashboard() {
 
                         <button
                           className="btn btn-danger btn-sm"
-                          onClick={() => cancelBooking(bk.id)}
+                          onClick={() => handleCancelBookingLocal(bk.id)}
                         >
                           Cancel
                         </button>
@@ -300,7 +334,7 @@ export default function Dashboard() {
                     {bk.status === 'confirmed' && (
                       <button
                         className="btn btn-danger btn-sm"
-                        onClick={() => cancelBooking(bk.id)}
+                        onClick={() => handleCancelBookingLocal(bk.id)}
                       >
                         Cancel Reservation
                       </button>
