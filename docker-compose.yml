@@ -1,0 +1,19 @@
+services:
+  schedulify:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: schedulify_app
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - DB_PATH=/app/data/schedulify.db
+    volumes:
+      - schedulify_sqlite_data:/app/data
+    restart: unless-stopped
+
+volumes:
+  schedulify_sqlite_data:
+    driver: local

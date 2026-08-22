@@ -1,3 +1,6 @@
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import express from 'express';
 import cors from 'cors';
 import bcrypt from 'bcryptjs';
@@ -537,12 +540,28 @@ app.get('/api/emails', async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════
+// SERVE PRODUCTION SPA STATIC FILES
+// ═══════════════════════════════════════════════════════════════
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const distPath = path.join(__dirname, '../dist');
+
+if (fs.existsSync(distPath)) {
+  app.use(express.static(distPath));
+  app.use((req, res, next) => {
+    if (req.path.startsWith('/api')) return next();
+    res.sendFile(path.join(distPath, 'index.html'));
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════
 // START SERVER
 // ═══════════════════════════════════════════════════════════════
 async function startServer() {
   await initDatabase();
-  app.listen(PORT, () => {
-    console.log(`\n  ✓ Schedulify API server running at http://localhost:${PORT}`);
+  const LISTEN_PORT = process.env.PORT || PORT;
+  app.listen(LISTEN_PORT, () => {
+    console.log(`\n  ✓ Schedulify API server running at http://localhost:${LISTEN_PORT}`);
     console.log(`  ✓ Database: Portable SQLite database @ server/schedulify.db`);
     console.log(`  ✓ Demo user: akhil@example.com / password123\n`);
   });
